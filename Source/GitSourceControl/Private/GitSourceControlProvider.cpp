@@ -574,6 +574,17 @@ bool FGitSourceControlProvider::UsesFileRevisions() const
 	return true;
 }
 
+#if ENGINE_MINOR_VERSION >= 8
+TOptional<bool> FGitSourceControlProvider::HasChangesToSync() const
+{
+	return TOptional<bool>();
+}
+
+TOptional<bool> FGitSourceControlProvider::HasChangesToCheckIn() const
+{
+	return TOptional<bool>();
+}
+#else
 TOptional<bool> FGitSourceControlProvider::IsAtLatestRevision() const
 {
 	return TOptional<bool>();
@@ -583,6 +594,7 @@ TOptional<int> FGitSourceControlProvider::GetNumLocalChanges() const
 {
 	return TOptional<int>();
 }
+#endif
 #endif
 
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 2
@@ -597,6 +609,13 @@ bool FGitSourceControlProvider::UsesUncontrolledChangelists() const
 }
 
 bool FGitSourceControlProvider::UsesSnapshots() const
+{
+	return false;
+}
+#endif
+
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 8
+bool FGitSourceControlProvider::UsesSoftRevertOnDelete() const
 {
 	return false;
 }
@@ -885,7 +904,7 @@ bool FGitSourceControlProvider::GetStateBranchAtIndex(int32 BranchIndex, FString
 {
 	auto StatusBranchNames = GetStatusBranchNames();
 
-	if (BranchIndex >= 0 && BranchIndex < StatusBranchNames.Num())
+	if (StatusBranchNames.IsValidIndex(BranchIndex))
 	{
 		OutBranchName = StatusBranchNames[BranchIndex];
 		return true;
@@ -928,7 +947,7 @@ int32 FGitSourceControlProvider::GetStateBranchIndex(const FString& StateBranchN
 TArray<FString> FGitSourceControlProvider::GetStatusBranchNames() const
 {
 	TArray<FString> StatusBranches;
-	if(PathToGitBinary.IsEmpty() || PathToRepositoryRoot.IsEmpty())
+	if (PathToGitBinary.IsEmpty() || PathToRepositoryRoot.IsEmpty())
 		return StatusBranches;
 	
 	for (int i = 0; i < StatusBranchNamePatternsInternal.Num(); i++)
