@@ -18,6 +18,15 @@
 #include "HAL/PlatformFilemanager.h"
 #endif
 
+#if PLATFORM_MAC
+// Cocoa, for the NSWorkspace/NSBundle/NSURL lookups in FindGitBinaryPath(). UE 5.8 stopped pulling
+// this in transitively via HAL/PlatformMisc.h unless UE_ENABLE_INCLUDE_ORDER_DEPRECATED_IN_5_8 is
+// set, so include it directly. Do not include <Foundation/Foundation.h> or <AppKit/AppKit.h>
+// instead: this header imports Cocoa inside Epic's FVector workaround, and without it Carbon's
+// NumberFormatting.h (reached via NSURLError.h -> CoreServices.h) collides with UE's FVector.
+#include "Mac/MacSystemIncludes.h"
+#endif
+
 #include "HAL/PlatformProcess.h"
 #include "Interfaces/IPluginManager.h"
 #include "ISourceControlModule.h"
@@ -436,8 +445,11 @@ FString FindGitBinaryPath()
 		bFound = CheckGitAvailability(GitBinaryPath);
 	}
 
+	// @autoreleasepool rather than SCOPED_AUTORELEASE_POOL: on 5.8 that macro only comes from
+	// Apple/ScopeAutoreleasePool.h, a header that does not exist before 5.8, so the language
+	// construct is the one form that compiles on every engine version.
+	@autoreleasepool
 	{
-		SCOPED_AUTORELEASE_POOL;
 		NSWorkspace* SharedWorkspace = [NSWorkspace sharedWorkspace];
 
 		// 5) Else, look for the version of local_git provided by SmartGit
