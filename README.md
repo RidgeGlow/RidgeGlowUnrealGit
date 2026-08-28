@@ -215,6 +215,20 @@ You can pull the latest changes from your currently checked-out branch within th
 
 You can learn more about how we set up our Git repository at [the PBCore wiki](https://github.com/ProjectBorealis/PBCore/wiki).
 
+## Contributing
+
+### Line endings
+
+There is no `.gitattributes` here, inherited from upstream, so line endings follow
+whatever each contributor's Git is configured to do. Almost every file is stored
+with LF, and Git for Windows' default `core.autocrlf=true` gives you CRLF in the
+working tree; a few files are stored with CRLF for historical reasons.
+
+Please don't reformat line endings. Rewriting a file with different endings turns a
+one-line change into a whole-file diff and makes merges from
+[upstream](https://github.com/ProjectBorealis/UEGitPlugin) harder to resolve. Keep
+whatever endings a file already has.
+
 ## License
 
 This plugin ships under two licenses depending on how you obtained it and which file you are
