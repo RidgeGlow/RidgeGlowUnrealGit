@@ -123,7 +123,8 @@ bool FGitCheckOutWorker::Execute(FGitSourceControlCommand& InCommand)
 		return InCommand.bCommandSuccessful;
 	}
 
-	const bool bSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("lock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), LockableRelativeFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+	const bool bSuccess = GitSourceControlUtils::LfsLockFiles(InCommand.PathToGitRoot, InCommand.PathToGitBinary, LockableRelativeFiles,
+																	  InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 	InCommand.bCommandSuccessful = bSuccess;
 	const FString& LockUser = FGitSourceControlModule::Get().GetProvider().GetLockUser();
 	if (bSuccess)
@@ -338,9 +339,8 @@ bool FGitCheckInWorker::Execute(FGitSourceControlCommand& InCommand)
 					if (FilesToUnlock.Num() > 0)
 					{
 						// Not strictly necessary to succeed, so don't update command success
-						const bool bUnlockSuccess = GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary,
-																						 FGitSourceControlModule::GetEmptyStringArray(), FilesToUnlock,
-																						 InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+						const bool bUnlockSuccess = GitSourceControlUtils::LfsUnlockFiles(InCommand.PathToGitRoot, InCommand.PathToGitBinary, FilesToUnlock,
+																	  InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 						if (bUnlockSuccess)
 						{
 							for (const auto& File : LockedFiles)
@@ -579,8 +579,8 @@ bool FGitRevertWorker::Execute(FGitSourceControlCommand& InCommand)
 		if (LockedFiles.Num() > 0)
 		{
 			const TArray<FString>& RelativeFiles = GitSourceControlUtils::RelativeFilenames(LockedFiles, InCommand.PathToGitRoot);
-			InCommand.bCommandSuccessful &= GitSourceControlUtils::RunLFSCommand(TEXT("unlock"), InCommand.PathToGitRoot, InCommand.PathToGitBinary, FGitSourceControlModule::GetEmptyStringArray(), RelativeFiles,
-																				 InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+			InCommand.bCommandSuccessful &= GitSourceControlUtils::LfsUnlockFiles(InCommand.PathToGitRoot, InCommand.PathToGitBinary, RelativeFiles,
+																	  InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
 			if (InCommand.bCommandSuccessful)
 			{
 				for (const auto& File : LockedFiles)

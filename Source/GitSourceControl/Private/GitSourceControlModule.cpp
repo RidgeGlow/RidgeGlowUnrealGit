@@ -6,6 +6,7 @@
 #include "GitSourceControlModule.h"
 
 #include "AssetToolsModule.h"
+#include "GitLfsLib.h"
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
 #include "Styling/AppStyle.h"
 #else
@@ -46,6 +47,13 @@ static TSharedRef<IGitSourceControlWorker, ESPMode::ThreadSafe> CreateWorker()
 
 void FGitSourceControlModule::StartupModule()
 {
+	// Load libgitlfs here rather than on first use. cgo attaches the calling
+	// thread to the Go runtime the first time it is called, which is better done
+	// once from a known thread than from whichever pool worker arrives first
+	// mid-operation. A failure here is not fatal: locking falls back to invoking
+	// git-lfs as a process, loudly.
+	GitLfsLib::Initialize();
+
 	// Register our operations (implemented in GitSourceControlOperations.cpp by subclassing from Engine\Source\Developer\SourceControl\Public\SourceControlOperations.h)
 	GitSourceControlProvider.RegisterWorker( "Connect", FGetGitSourceControlWorker::CreateStatic( &CreateWorker<FGitConnectWorker> ) );
 	// Note: this provider uses the "CheckOut" command only with Git LFS 2 "lock" command, since Git itself has no lock command (all tracked files in the working copy are always already checked-out).

@@ -30,18 +30,10 @@ public class GitSourceControl : ModuleRules
 			PrivateDependencyModuleNames.Add("ToolMenus");
 		}
 
-		if (Target.Platform == UnrealTargetPlatform.Win64)
-		{
-			RuntimeDependencies.Add("$(PluginDir)/git-lfs.exe");
-		}
-		else if (Target.Platform == UnrealTargetPlatform.Mac)
-		{
-			RuntimeDependencies.Add("$(PluginDir)/git-lfs-mac-amd64");
-			RuntimeDependencies.Add("$(PluginDir)/git-lfs-mac-arm64");			
-		}
-		else if (Target.Platform == UnrealTargetPlatform.Linux)
-		{
-			RuntimeDependencies.Add("$(PluginDir)/git-lfs");
-		}
+		// libgitlfs replaces the bundled git-lfs binaries this plugin used to ship
+		// and spawn per lock operation. GitLfsLib publishes the header and stages
+		// the shared library; it never links, so this dependency cannot break a
+		// build even when the library is unavailable.
+		PrivateDependencyModuleNames.Add("GitLfsLib");
 	}
 }
