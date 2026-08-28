@@ -1,0 +1,19 @@
+# Pinned libgitlfs release.
+#
+# A plain text file, not JSON: UnrealBuildTool does not reference a JSON parser
+# when compiling .Build.cs rules assemblies on every engine version we support,
+# and this needs to be readable from UE 4.27 through 5.8 with no dependencies.
+#
+# Format:
+#   tag <release-tag>
+#   <platform-key> <file-name> <sha256>
+#
+# A platform line with an empty or placeholder hash is treated as "not pinned
+# yet": acquisition is skipped with a warning rather than downloading something
+# unverified. Fill these in when the release is cut, from its SHA256SUMS.
+
+tag lib-v1.0.0
+
+win64 libgitlfs-windows-amd64.dll     PENDING_RELEASE
+mac   libgitlfs-darwin-universal.dylib PENDING_RELEASE
+linux libgitlfs-linux-amd64.so        PENDING_RELEASE
