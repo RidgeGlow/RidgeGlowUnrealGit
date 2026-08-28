@@ -38,7 +38,7 @@
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
 
-static FName ProviderName("Git LFS 2");
+static FName ProviderName("Enhanced Git with LFS & Locking");
 
 void FGitSourceControlProvider::Init(bool bForceConnection)
 {

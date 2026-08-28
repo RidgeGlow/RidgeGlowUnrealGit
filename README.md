@@ -214,3 +214,34 @@ You can pull the latest changes from your currently checked-out branch within th
 ## Additional Resources
 
 You can learn more about how we set up our Git repository at [the PBCore wiki](https://github.com/ProjectBorealis/PBCore/wiki).
+
+## Contributing
+
+### Line endings
+
+There is no `.gitattributes` here, inherited from upstream, so line endings follow
+whatever each contributor's Git is configured to do. Almost every file is stored
+with LF, and Git for Windows' default `core.autocrlf=true` gives you CRLF in the
+working tree; a few files are stored with CRLF for historical reasons.
+
+Please don't reformat line endings. Rewriting a file with different endings turns a
+one-line change into a whole-file diff and makes merges from
+[upstream](https://github.com/ProjectBorealis/UEGitPlugin) harder to resolve. Keep
+whatever endings a file already has.
+
+## License
+
+This plugin ships under two licenses depending on how you obtained it and which file you are
+looking at. Full detail in [`NOTICE.md`](NOTICE.md).
+
+- **Bought on Fab** — your rights come from Epic's Fab Standard License. Nothing in this
+  repository adds to or subtracts from it.
+- **Cloned from GitHub, or used as a submodule** — code inherited from
+  [ProjectBorealis/UEGitPlugin](https://github.com/ProjectBorealis/UEGitPlugin) and
+  [SRombauts/UE4GitPlugin](https://github.com/SRombauts/UE4GitPlugin) stays
+  [MIT](LICENSE-MIT.txt). New RidgeGlow code is [FSL-1.1-MIT](LICENSE): use it for anything,
+  including commercial game development, except shipping a competing plugin. Each version
+  becomes MIT two years after release.
+
+The module is editor-only (`UncookedOnly`) and is never compiled into a packaged game, so
+neither license touches a product you build with it.

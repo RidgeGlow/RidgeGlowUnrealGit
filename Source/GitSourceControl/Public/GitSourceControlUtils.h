@@ -336,7 +336,22 @@ TArray<FString> AbsoluteFilenames(const TArray<FString>& InFileNames, const FStr
  */
 void RemoveRedundantErrors(FGitSourceControlCommand& InCommand, const FString& InFilter);
 
-	bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InParameters, const TArray<FString>& InFiles, TArray<FString>& OutResults, TArray<FString>& OutErrorMessages);
+/**
+ * Lock the given files through Git LFS.
+ *
+ * Prefers the in-process libgitlfs library and falls back to invoking git-lfs as
+ * a process only when that library could not be loaded, which is reported rather
+ * than entered silently. Paths may be absolute or relative to the repository root.
+ *
+ * Locking is partial-success: a false return means at least one path failed, and
+ * every failure is appended to OutErrorMessages with the path it belongs to.
+ */
+bool LfsLockFiles(const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InFiles,
+				  TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages);
+
+/** Unlock the given files through Git LFS. See LfsLockFiles for the return contract. */
+bool LfsUnlockFiles(const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InFiles,
+					TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages);
 
 /**
  * Helper function for various commands to update cached states.

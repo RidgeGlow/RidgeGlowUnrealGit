@@ -5,6 +5,7 @@
 
 #include "GitSourceControlUtils.h"
 
+#include "GitLfsLib.h"
 #include "GitMessageLog.h"
 #include "GitSourceControlCommand.h"
 #include "GitSourceControlModule.h"
@@ -838,41 +839,79 @@ bool RunCommand(const FString& InCommand, const FString& InPathToGitBinary, cons
 	return bResult;
 }
 
-#ifndef GIT_USE_CUSTOM_LFS
-#define GIT_USE_CUSTOM_LFS 1
-#endif
-
-bool RunLFSCommand(const FString& InCommand, const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InParameters, const TArray<FString>& InFiles,
-				   TArray<FString>& OutResults, TArray<FString>& OutErrorMessages)
+/**
+ * Degraded-mode path: invoke the user's own git-lfs via `git lfs <command>`.
+ *
+ * The plugin used to bundle and spawn a git-lfs binary per platform. That is now
+ * libgitlfs' job; this remains only for when the library could not be loaded, and
+ * is never chosen while the library is available. See GitLfsLib.h.
+ */
+static bool RunLFSCommandFallback(const FString& InCommand, const FString& InRepositoryRoot, const FString& GitBinaryFallback,
+								  const TArray<FString>& InParameters, const TArray<FString>& InFiles,
+								  TArray<FString>& OutResults, TArray<FString>& OutErrorMessages)
 {
-	FString Command = InCommand;
-#if GIT_USE_CUSTOM_LFS
-	FString BaseDir = IPluginManager::Get().FindPlugin("GitSourceControl")->GetBaseDir();
-#if PLATFORM_WINDOWS
-	FString LFSLockBinary = FString::Printf(TEXT("%s/git-lfs.exe"), *BaseDir);
-#elif PLATFORM_MAC
-#if ENGINE_MAJOR_VERSION >= 5
-#if PLATFORM_MAC_ARM64
-	FString LFSLockBinary = FString::Printf(TEXT("%s/git-lfs-mac-arm64"), *BaseDir);
-#else
-	FString LFSLockBinary = FString::Printf(TEXT("%s/git-lfs-mac-amd64"), *BaseDir);
-#endif
-#else
-	FString LFSLockBinary = FString::Printf(TEXT("%s/git-lfs-mac-amd64"), *BaseDir);
-#endif
-#elif PLATFORM_LINUX
-	FString LFSLockBinary = FString::Printf(TEXT("%s/git-lfs"), *BaseDir);
-#else
-	ensureMsgf(false, TEXT("Unhandled platform for LFS binary!"));
-	const FString& LFSLockBinary = GitBinaryFallback;
-	Command = TEXT("lfs ") + Command;
-#endif
-#else
-	const FString& LFSLockBinary = GitBinaryFallback;
-	Command = TEXT("lfs ") + Command;
-#endif
+	return GitSourceControlUtils::RunCommand(TEXT("lfs ") + InCommand, GitBinaryFallback, InRepositoryRoot,
+											 InParameters, InFiles, OutResults, OutErrorMessages);
+}
 
-	return GitSourceControlUtils::RunCommand(Command, LFSLockBinary, InRepositoryRoot, InParameters, InFiles, OutResults, OutErrorMessages);
+/** Shared shape of the two bulk entry points, which differ only in verb. */
+static bool RunLfsBulk(bool bLock, const FString& InRepositoryRoot, const FString& GitBinaryFallback,
+					   const TArray<FString>& InFiles, TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages)
+{
+	if (InFiles.Num() == 0)
+	{
+		return true;
+	}
+
+	const TCHAR* Verb = bLock ? TEXT("lock") : TEXT("unlock");
+
+	if (GitLfsLib::IsAvailable())
+	{
+		TArray<FString> Succeeded;
+		TArray<GitLfsLib::FPathError> Failures;
+		FString FatalError;
+
+		const bool bBatchRan = bLock
+			? GitLfsLib::LockFiles(InRepositoryRoot, InFiles, Succeeded, Failures, FatalError)
+			: GitLfsLib::UnlockFiles(InRepositoryRoot, InFiles, /*bForce=*/false, Succeeded, Failures, FatalError);
+
+		if (!bBatchRan)
+		{
+			// The library is present but failed. Report it; do not quietly switch
+			// to the process path, which would trade a visible fault for a silent
+			// permanent slowdown.
+			OutErrorMessages.Add(FatalError.IsEmpty()
+				? FString::Printf(TEXT("git lfs %s failed"), Verb)
+				: FatalError);
+			return false;
+		}
+
+		// Bulk calls are partial-success, so per-path errors are real results
+		// rather than an all-or-nothing failure. The bundled-binary path discarded
+		// these entirely.
+		for (const GitLfsLib::FPathError& Failure : Failures)
+		{
+			OutErrorMessages.Add(FString::Printf(TEXT("%s: %s"), *Failure.Path, *Failure.Error));
+		}
+		return Failures.Num() == 0;
+	}
+
+	GitLfsLib::NoteFallbackUsed(Verb, OutInfoMessages);
+	return RunLFSCommandFallback(Verb, InRepositoryRoot, GitBinaryFallback,
+								 FGitSourceControlModule::GetEmptyStringArray(), InFiles,
+								 OutInfoMessages, OutErrorMessages);
+}
+
+bool LfsLockFiles(const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InFiles,
+				  TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages)
+{
+	return RunLfsBulk(/*bLock=*/true, InRepositoryRoot, GitBinaryFallback, InFiles, OutInfoMessages, OutErrorMessages);
+}
+
+bool LfsUnlockFiles(const FString& InRepositoryRoot, const FString& GitBinaryFallback, const TArray<FString>& InFiles,
+					TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages)
+{
+	return RunLfsBulk(/*bLock=*/false, InRepositoryRoot, GitBinaryFallback, InFiles, OutInfoMessages, OutErrorMessages);
 }
 
 // Run a Git "commit" command by batches
@@ -1572,6 +1611,73 @@ void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRo
 
 const FTimespan CacheLimit = FTimespan::FromSeconds(30);
 
+/**
+ * One `git lfs locks` query, through the library when it is loaded.
+ *
+ * @param DefaultLockUser  Substituted when the server reports no owner. The old
+ *                         text parser could not tell "no owner column" from a
+ *                         malformed line and assumed the current user for both;
+ *                         this preserves that classification, now driven by an
+ *                         explicit null owner rather than a parsing accident.
+ * @param bSkipIfBusy      Passed through so the periodic background refresh can
+ *                         yield rather than delay a user-initiated operation.
+ */
+static bool LfsGetLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback,
+						GitLfsLib::ELockQuery Query, const FString& DefaultLockUser,
+						TMap<FString, FString>& OutLocks,
+						TArray<FString>& OutInfoMessages, TArray<FString>& OutErrorMessages,
+						bool bSkipIfBusy)
+{
+	if (GitLfsLib::IsAvailable())
+	{
+		FString Error;
+		TMap<FString, FString> Found;
+		if (!GitLfsLib::GetLocks(InRepositoryRoot, Query, Found, Error, bSkipIfBusy))
+		{
+			if (!Error.IsEmpty())
+			{
+				OutErrorMessages.Add(Error);
+			}
+			return false;
+		}
+
+		for (TPair<FString, FString>& Lock : Found)
+		{
+			OutLocks.Add(Lock.Key, Lock.Value.IsEmpty() ? DefaultLockUser : Lock.Value);
+		}
+		return true;
+	}
+
+	GitLfsLib::NoteFallbackUsed(TEXT("locks"), OutInfoMessages);
+
+	TArray<FString> Params;
+	if (Query == GitLfsLib::ELockQuery::Cached)
+	{
+		Params.Add(TEXT("--cached"));
+	}
+	else if (Query == GitLfsLib::ELockQuery::Local)
+	{
+		Params.Add(TEXT("--local"));
+	}
+
+	TArray<FString> Results;
+	if (!RunLFSCommandFallback(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params,
+							   FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages))
+	{
+		return false;
+	}
+
+	for (const FString& Result : Results)
+	{
+		FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
+#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
+		UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
+#endif
+		OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
+	}
+	return true;
+}
+
 bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<FString, FString>& OutLocks, bool bInvalidateCache)
 {
 	// You may ask, why are we ignoring state cache, and instead maintaining our own lock cache?
@@ -1592,70 +1698,55 @@ bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallba
 	bool bResult = false;
 	if (bCacheExpired)
 	{
+		// Resolved once up front: both the remote query and the cached/local
+		// fallbacks need it, and the library reports a null owner rather than
+		// omitting the column.
+		FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
+		const FString LockUser = GitSourceControl ? GitSourceControl->GetProvider().GetLockUser() : FString();
+
+		TArray<FString> InfoMessages;
+
 		// Our cache expired, or they asked us to expire cache. Query locks directly from the remote server.
-		TArray<FString> ErrorMessages;
-		TArray<FString> Results;
-		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FGitSourceControlModule::GetEmptyStringArray(), FGitSourceControlModule::GetEmptyStringArray(),
-								Results, OutErrorMessages);
+		// A caller that forced invalidation is the periodic background refresh, which yields rather than
+		// waiting on a user-initiated operation.
+		bResult = LfsGetLocks(InRepositoryRoot, GitBinaryFallback, GitLfsLib::ELockQuery::Remote, LockUser,
+							  OutLocks, InfoMessages, OutErrorMessages, /*bSkipIfBusy=*/bInvalidateCache);
 		if (bResult)
 		{
-			for (const FString& Result : Results)
-			{
-				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
-#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-#endif
-				OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
-			}
 			FGitLockedFilesCache::LastUpdated = CurrentTime;
 			FGitLockedFilesCache::SetLockedFiles(OutLocks);
 			return bResult;
 		}
-		// We tried to invalidate the UE cache, but we failed for some reason. Try updating lock state from LFS cache.
-		// Get the last known state of remote locks
-		TArray<FString> Params;
-		Params.Add(TEXT("--cached"));
 
-		FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
+		// We tried to invalidate the UE cache, but we failed for some reason. Try updating lock state from LFS cache.
+		OutLocks.Reset();
 		if (!GitSourceControl)
 		{
 			bResult = false;
 		}
 		else
 		{
-			FGitSourceControlProvider& Provider = GitSourceControl->GetProvider();
-			const FString& LockUser = Provider.GetLockUser();
-
-			Results.Reset();
-			bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
-			for (const FString& Result : Results)
+			// Get the last known state of remote locks, keeping only the ones that are not ours.
+			TMap<FString, FString> CachedLocks;
+			bResult = LfsGetLocks(InRepositoryRoot, GitBinaryFallback, GitLfsLib::ELockQuery::Cached, LockUser,
+								  CachedLocks, InfoMessages, OutErrorMessages, /*bSkipIfBusy=*/false);
+			for (TPair<FString, FString>& Lock : CachedLocks)
 			{
-				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
-	#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-	#endif
-				// Only update remote locks
-				if (LockFile.LockUser != LockUser)
+				if (Lock.Value != LockUser)
 				{
-					OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
+					OutLocks.Add(Lock.Key, Lock.Value);
 				}
 			}
-			// Get the latest local state of our own locks
-			Params.Reset(1);
-			Params.Add(TEXT("--local"));
 
-			Results.Reset();
-			bResult &= RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FGitSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
-			for (const FString& Result : Results)
+			// Get the latest local state of our own locks.
+			TMap<FString, FString> LocalLocks;
+			bResult &= LfsGetLocks(InRepositoryRoot, GitBinaryFallback, GitLfsLib::ELockQuery::Local, LockUser,
+								   LocalLocks, InfoMessages, OutErrorMessages, /*bSkipIfBusy=*/false);
+			for (TPair<FString, FString>& Lock : LocalLocks)
 			{
-				FGitLfsLocksParser LockFile(InRepositoryRoot, Result);
-	#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-	#endif
-				// Only update local locks
-				if (LockFile.LockUser == LockUser)
+				if (Lock.Value == LockUser)
 				{
-					OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
+					OutLocks.Add(Lock.Key, Lock.Value);
 				}
 			}
 		}

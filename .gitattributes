@@ -1,0 +1,18 @@
+# Normalise line endings so they no longer depend on each contributor's Git
+# config. Without this, a contributor on Linux or macOS -- where core.autocrlf
+# defaults to false rather than Git for Windows' true -- commits whatever
+# endings their editor produced, turning a one-line change into a whole-file
+# diff for everyone else.
+#
+# text=auto stores LF and checks out native endings, so Windows working copies
+# still get CRLF and nothing changes about how you edit.
+#
+# Deliberately added WITHOUT `git add --renormalize`. text=auto does not convert
+# files that were already committed with CRLF, so the handful of files in this
+# repository that carry CRLF keep it, no rewrite lands here, and those files
+# stay byte-compatible with the same files upstream. Renormalising them would be
+# a separate, deliberate decision.
+* text=auto
+
+# Assets, marked explicitly rather than relying on content detection.
+*.png binary

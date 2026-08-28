@@ -1,0 +1,130 @@
+name: Release
+
+# Produces the Fab submission archive.
+#
+# Fab distributes code plugins as source and compiles them itself, so the
+# libgitlfs libraries must be BAKED IN rather than downloaded: Epic's build
+# machines will not run the acquisition step in GitLfsLib.Build.cs, and neither
+# should a paying customer's. The stamps written here are what make that
+# step short-circuit.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or ref to package'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build Fab archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - name: Verify the plugin still wins the name collision
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This plugin deliberately shares the name 'GitSourceControl' with the
+          # engine's built-in one -- that is how it takes over as the Git provider.
+          # For an engine-level install both are PluginType.Engine, so the tie is
+          # broken on the descriptor Version, in UnrealBuildTool (Plugins.cs) and
+          # at runtime (PluginManager.cpp) alike. If this regresses, the provider
+          # silently reverts to Epic's plugin.
+          VERSION="$(grep -oP '"Version"\s*:\s*\K[0-9]+' GitSourceControl.uplugin | head -n1)"
+          echo "descriptor Version: $VERSION"
+          # 14 is Epic's stock plugin; 316 is the highest third-party claimant
+          # (ProjectBorealis/UEGitPlugin) observed in the wild.
+          if [ "$VERSION" -le 316 ]; then
+            echo "::error::Version $VERSION does not exceed known competing plugins (max 316); the provider takeover would break."
+            exit 1
+          fi
+
+      - name: Bake in the pinned libgitlfs libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST=Source/ThirdParty/GitLfsLib/GitLfsLib.deps.txt
+          TAG="$(awk '$1=="tag" {print $2}' "$MANIFEST")"
+          [ -n "$TAG" ] || { echo "::error::no tag in $MANIFEST"; exit 1; }
+          echo "libgitlfs release: $TAG"
+
+          BASE="https://github.com/RidgeGlow/git-lfs-lib/releases/download/$TAG"
+          curl -fsSL "$BASE/SHA256SUMS" -o /tmp/SHA256SUMS
+
+          # One entry per platform, matching the keys GitLfsLib.Build.cs maps to.
+          awk '$1 ~ /^(win64|mac|linux)$/ {print $1, $2, $3}' "$MANIFEST" | while read -r KEY FILE HASH; do
+            if [ "$HASH" = "PENDING_RELEASE" ] || [ -z "$HASH" ]; then
+              echo "::error::$KEY is not pinned in $MANIFEST; fill in its SHA-256 from the $TAG release before tagging."
+              exit 1
+            fi
+
+            DEST="Source/ThirdParty/GitLfsLib/Lib/$KEY"
+            mkdir -p "$DEST"
+            curl -fsSL "$BASE/$FILE" -o "$DEST/$FILE"
+
+            ACTUAL="$(sha256sum "$DEST/$FILE" | cut -d' ' -f1)"
+            if [ "$ACTUAL" != "$HASH" ]; then
+              echo "::error::$FILE checksum mismatch (expected $HASH, got $ACTUAL)"
+              exit 1
+            fi
+            # Cross-check against the release's own manifest as well, so a
+            # transcription error in our pin cannot slip through.
+            grep -q "$ACTUAL" /tmp/SHA256SUMS \
+              || { echo "::error::$FILE is not listed in the $TAG SHA256SUMS"; exit 1; }
+
+            # Matches the format GitLfsLibAcquire.WriteStamp produces, so the
+            # build sees the payload as current and skips the download entirely.
+            printf '%s|%s' "$TAG" "$HASH" > "$DEST/.stamp"
+            echo "baked $KEY -> $FILE"
+          done
+
+      - name: Assemble the archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Fab's structure requirements list Config and Content as mandatory for
+          # code plugins. Config exists; Content does not, because the plugin
+          # declares "CanContainContent": false.
+          mkdir -p Config Content
+          [ -f Content/.gitkeep ] || touch Content/.gitkeep
+
+          STAGE=/tmp/stage/GitSourceControl
+          mkdir -p "$STAGE"
+          # Copy everything except build output, VCS metadata and repo-only assets.
+          rsync -a --exclude '.git' --exclude '.github' --exclude 'Binaries' \
+                   --exclude 'Intermediate' --exclude 'Saved' --exclude 'Screenshots' \
+                   --exclude '.gitignore' --exclude '.gitattributes' \
+                   ./ "$STAGE/"
+
+          # The payload must survive: it is the whole point of this job.
+          for KEY in win64 mac linux; do
+            ls "$STAGE/Source/ThirdParty/GitLfsLib/Lib/$KEY/" >/dev/null \
+              || { echo "::error::$KEY payload missing from the archive"; exit 1; }
+          done
+
+          VERSION="$(grep -oP '"VersionName"\s*:\s*"\K[^"]+' GitSourceControl.uplugin | head -n1)"
+          cd /tmp/stage
+          zip -qr "$GITHUB_WORKSPACE/EnhancedGitLFS-${VERSION}.zip" GitSourceControl
+          cd "$GITHUB_WORKSPACE"
+          unzip -l "EnhancedGitLFS-${VERSION}.zip" | tail -5
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fab-archive
+          path: EnhancedGitLFS-*.zip
+
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: EnhancedGitLFS-*.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
