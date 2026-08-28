@@ -276,6 +276,16 @@ internal static class GitLfsLibAcquire
 		finally
 		{
 			Lock.Dispose();
+			try
+			{
+				// Best effort: the lock file has served its purpose and would
+				// otherwise be packaged into the shipped plugin. Losing this race
+				// with another build costs nothing.
+				File.Delete(LockPath);
+			}
+			catch (Exception)
+			{
+			}
 		}
 	}
 

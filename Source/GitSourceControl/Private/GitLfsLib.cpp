@@ -172,22 +172,57 @@ namespace
 	}
 }
 
-FString GetExpectedLibraryPath()
+TArray<FString> GetLibrarySearchPaths()
 {
+	TArray<FString> Paths;
+
 	const TCHAR* FileName = LibraryFileName();
 	if (!FileName)
 	{
-		return FString();
+		return Paths;
 	}
 
 	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("GitSourceControl"));
 	if (!Plugin.IsValid())
 	{
-		return FString();
+		return Paths;
 	}
+	const FString BaseDir = Plugin->GetBaseDir();
 
-	return FPaths::Combine(Plugin->GetBaseDir(), TEXT("Binaries"),
-						   FPlatformProcess::GetBinariesSubdirectory(), FileName);
+	// Binaries first, so a hand-placed library or a staged copy takes precedence.
+	Paths.Add(FPaths::Combine(BaseDir, TEXT("Binaries"),
+							  FPlatformProcess::GetBinariesSubdirectory(), FileName));
+
+	// Then where GitLfsLib.Build.cs actually puts it. This is the reliable one:
+	// it is populated by the build-time download, baked in by the Fab release
+	// workflow, and carried by RunUAT BuildPlugin's package output, whereas
+	// RuntimeDependencies staging into Binaries does not happen in every build
+	// mode. The key must match PlatformKey() in GitLfsLib.Build.cs.
+#if PLATFORM_WINDOWS
+	const TCHAR* PlatformKey = TEXT("win64");
+#elif PLATFORM_MAC
+	const TCHAR* PlatformKey = TEXT("mac");
+#else
+	const TCHAR* PlatformKey = TEXT("linux");
+#endif
+	Paths.Add(FPaths::Combine(BaseDir, TEXT("Source"), TEXT("ThirdParty"), TEXT("GitLfsLib"),
+							  TEXT("Lib"), PlatformKey, FileName));
+
+	return Paths;
+}
+
+FString GetExpectedLibraryPath()
+{
+	const TArray<FString> Paths = GetLibrarySearchPaths();
+	for (const FString& Path : Paths)
+	{
+		if (FPaths::FileExists(Path))
+		{
+			return Path;
+		}
+	}
+	// Nothing present: name the canonical location so the message is actionable.
+	return Paths.Num() > 1 ? Paths[1] : (Paths.Num() > 0 ? Paths[0] : FString());
 }
 
 void Initialize()
@@ -199,21 +234,31 @@ void Initialize()
 	}
 	GInitialized = true;
 
-	const FString LibraryPath = GetExpectedLibraryPath();
-	if (LibraryPath.IsEmpty())
+	const TArray<FString> SearchPaths = GetLibrarySearchPaths();
+	if (SearchPaths.Num() == 0)
 	{
 		UE_LOG(LogSourceControl, Warning,
 			   TEXT("Git LFS library is not available on this platform; falling back to running git-lfs as a process."));
 		return;
 	}
 
-	if (!FPaths::FileExists(LibraryPath))
+	FString LibraryPath;
+	for (const FString& Candidate : SearchPaths)
+	{
+		if (FPaths::FileExists(Candidate))
+		{
+			LibraryPath = Candidate;
+			break;
+		}
+	}
+
+	if (LibraryPath.IsEmpty())
 	{
 		UE_LOG(LogSourceControl, Warning,
 			   TEXT("Git LFS library was not found at '%s'. Locking will fall back to running git-lfs as a process, ")
 			   TEXT("which is slower. Rebuild the plugin with network access, or download the library from ")
 			   TEXT("https://github.com/RidgeGlow/git-lfs-lib/releases and place it at that path."),
-			   *LibraryPath);
+			   *GetExpectedLibraryPath());
 		return;
 	}
 

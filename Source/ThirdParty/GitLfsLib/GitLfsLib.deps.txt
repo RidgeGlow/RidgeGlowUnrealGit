@@ -14,6 +14,6 @@
 
 tag lib-v1.0.0
 
-win64 libgitlfs-windows-amd64.dll     PENDING_RELEASE
-mac   libgitlfs-darwin-universal.dylib PENDING_RELEASE
-linux libgitlfs-linux-amd64.so        PENDING_RELEASE
+win64  libgitlfs-windows-amd64.dll      3f64ddfd15dd1a6e1bbcc539955b0150a96b818bf47caaab50a4bebf96c6461d
+mac    libgitlfs-darwin-universal.dylib 6f6042f7dfc7db106410577e00d55d9fc937c03368df91df4748663c287b1790
+linux  libgitlfs-linux-amd64.so         e83ba28104aa5c658a9fbca485290243c78e805f528ccc387fb08bc69f467f35

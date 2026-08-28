@@ -53,7 +53,13 @@ namespace GitLfsLib
 	/** True once the library and all of its entry points have been resolved. */
 	bool IsAvailable();
 
-	/** Absolute path the library was looked for at. Useful in diagnostics and UI. */
+	/** Locations searched for the library, in order. */
+	TArray<FString> GetLibrarySearchPaths();
+
+	/**
+	 * The library's path if it is present, otherwise the location it should be
+	 * placed at. Useful in diagnostics and UI.
+	 */
 	FString GetExpectedLibraryPath();
 
 	/**
